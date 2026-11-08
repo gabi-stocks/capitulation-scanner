@@ -3,6 +3,8 @@ import pandas as pd
 import datetime
 import requests
 import os
+import sys
+from io import StringIO
 
 # ============================================================
 # סורק מניות בדפוס "התאוששות אחרי צניחה" (Capitulation Recovery)
@@ -68,27 +70,43 @@ def write_github_output(results):
         f.write(f"tickers={', '.join(tickers_found)}\n")
 
 
+def fetch_wiki_tickers(url, column, headers):
+    """מושך טבלת מניות מוויקיפדיה ומחפש את הטבלה לפי שם העמודה (ולא לפי מיקום קבוע)"""
+    resp = requests.get(url, headers=headers, timeout=30)
+    resp.raise_for_status()
+    # pandas 3 דורש לעטוף את ה-HTML ב-StringIO
+    for table in pd.read_html(StringIO(resp.text)):
+        if column in table.columns:
+            return table[column].dropna().astype(str).tolist()
+    raise ValueError(f"column '{column}' not found at {url}")
+
+
+def get_tickers():
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36'}
+    tickers = []
+    sources = [
+        ('https://en.wikipedia.org/wiki/List_of_S%26P_500_companies', 'Symbol', 'S&P 500'),
+        ('https://en.wikipedia.org/wiki/Nasdaq-100', 'Ticker', 'Nasdaq-100'),
+    ]
+    for url, column, name in sources:
+        try:
+            lst = fetch_wiki_tickers(url, column, headers)
+            print(f"{name}: {len(lst)} tickers")
+            tickers.extend(lst)
+        except Exception as e:
+            print(f"ERROR fetching {name}: {e}")
+
+    tickers = sorted(set(t.replace('.', '-') for t in tickers))
+    # אם רשימת המניות לא נמשכה כראוי - להכשיל את הריצה במקום לסרוק רשימה חלקית בשקט
+    if len(tickers) < 400:
+        print(f"ERROR: only {len(tickers)} tickers fetched - aborting so the failure is visible")
+        sys.exit(1)
+    return tickers
+
+
 def run_scanner():
     print("Starting Capitulation Recovery Scan...")
-    tickers = []
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
-
-    # משיכת מניות S&P 500 ו-Nasdaq 100
-    try:
-        url_sp = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'
-        resp_sp = requests.get(url_sp, headers=headers)
-        sp500 = pd.read_html(resp_sp.text)[0]['Symbol'].tolist()
-        tickers.extend(sp500)
-
-        url_nas = 'https://en.wikipedia.org/wiki/Nasdaq-100'
-        resp_nas = requests.get(url_nas, headers=headers)
-        nasdaq = pd.read_html(resp_nas.text)[4]['Ticker'].tolist()
-        tickers.extend(nasdaq)
-    except:
-        print("Wiki fetch failed, using backup...")
-        tickers = ["AAPL", "NVDA", "TSLA", "MSFT", "AMD", "META", "AMZN", "GOOGL"]
-
-    tickers = list(set([str(t).replace('.', '-') for t in tickers]))
+    tickers = get_tickers()
     results = []
     print(f"Scanning {len(tickers)} stocks...")
 
@@ -182,7 +200,7 @@ def run_scanner():
             <h1>💎 סורק התאוששות אחרי צניחה (Capitulation Recovery)</h1>
             <p style="text-align:center; color:#666;">
             מניות שצנחו מעל 35% ב-6 חודשים, עברו שלב דשדוש, פרצו ממנו, ומתקרבות כעת ל-MA150<br>
-            סריקה אחרונה: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} UTC</p>
+            נסרקו {len(tickers)} מניות · סריקה אחרונה: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} UTC</p>
             {table_html}
         </div>
     </body>
