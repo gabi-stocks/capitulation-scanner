@@ -1,0 +1,68 @@
+name: Master Stock Scan
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '30 21 * * 1,3,5'   # 21:30 UTC = אחרי סגירת וול-סטריט, ימים ב', ד', ו'
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+jobs:
+  build_and_deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install yfinance pandas lxml html5lib requests
+
+      - name: Run scanner
+        id: scan
+        run: python main.py
+
+      - name: Commit and Push changes
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git stash
+          git pull --rebase origin main
+          git stash pop || echo "No changes to pop"
+          git add index.html
+          git commit -m "Automated stock scan update" || echo "No changes to commit"
+          git push origin main
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: '.'
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+      # שליחת מייל רק אם נמצאו מניות (אחרי שהאתר כבר עודכן)
+      - name: Send email if results found
+        if: steps.scan.outputs.count != '' && steps.scan.outputs.count != '0'
+        env:
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          MAIL_TO: ${{ secrets.MAIL_TO }}
+          SCAN_COUNT: ${{ steps.scan.outputs.count }}
+          SCAN_TICKERS: ${{ steps.scan.outputs.tickers }}
+          SITE_URL: ${{ steps.deployment.outputs.page_url }}
+        run: python send_email.py
